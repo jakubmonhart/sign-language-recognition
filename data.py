@@ -141,7 +141,7 @@ class WLASL(Dataset):
                 if prob > 0.5:
                     pad_img = imgs[0]
                     pad = np.tile(np.expand_dims(pad_img, axis=0), (num_padding, 1, 1, 1))
-                    padded_imgs = np.concatenate([imgs, pad], axis=0)
+                    padded_imgs = np.concatenate([pad, imgs], axis=0)
                 else:
                     pad_img = imgs[-1]
                     pad = np.tile(np.expand_dims(pad_img, axis=0), (num_padding, 1, 1, 1))
