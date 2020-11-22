@@ -11,7 +11,7 @@ train_transforms = transforms.Compose([videotransforms.RandomCrop(224),
 
 # Create dataset
 train_dataset = WLASL(
-    json_file='data/WLASL_v0.3.json', videos_path='data/sample-videos',
+    json_file='../data/WLASL_v0.3.json', videos_path='../data/sample-videos',
     split='train', transforms=train_transforms)
 
 train_dataloader = DataLoader(
