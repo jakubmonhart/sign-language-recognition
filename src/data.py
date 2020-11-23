@@ -21,7 +21,7 @@ def get_class_list(json_file):
     return class_list
 
 
-def load_rgb_frames_from_video(video_path, start_f, num_f):
+def load_rgb_frames_from_video(video_path, start_f, num_f, verbose):
 
     vidcap = cv2.VideoCapture(video_path)
 
@@ -33,9 +33,11 @@ def load_rgb_frames_from_video(video_path, start_f, num_f):
     for offset in range(min(num_f, int(total_frames - start_f))):
         success, img = vidcap.read()
         
-        if not success:
-            print('{} unsuccesfull read at frame: {}/{}'.format(
-                video_path ,offset-start_f, min(num_f, int(total_frames - start_f))))
+        if (not success):
+            if verbose:
+                print('{} unsuccesfull read at frame: {}/{}'.format(
+                    video_path ,offset-start_f, min(num_f, int(total_frames - start_f))))
+                
             break
 
         w, h, c = img.shape
@@ -69,7 +71,7 @@ def video_to_tensor(pic):
 
 
 class WLASL(Dataset):
-    def __init__(self, json_file='data/WLASL_v0.3.json', videos_path='data/sample-videos', split='train', transforms=None):
+    def __init__(self, json_file='data/WLASL_v0.3.json', videos_path='data/sample-videos', split='train', transforms=None, verbose=False):
         self.class_list = get_class_list(json_file)
         self.num_classes = len(self.class_list)
         
@@ -99,6 +101,7 @@ class WLASL(Dataset):
         
         self.data = dataset
         self.transforms = transforms
+        self.verbose = verbose
     
     def __len__(self):
         return len(self.data['label'])
@@ -121,7 +124,7 @@ class WLASL(Dataset):
             start_f = 0
         
         # TODO - resize the frames so that bounding box is in center and 256 pixels in diagonal, crop rest of the image?
-        imgs = load_rgb_frames_from_video(video_path, start_f, total_frames)
+        imgs = load_rgb_frames_from_video(video_path, start_f, total_frames, self.verbose)
         
         if self.transforms is not None:
             imgs = self.transforms(imgs)

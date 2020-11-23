@@ -10,3 +10,10 @@ Returns videos as torch.FloatTensor of shape (C x T x H x W)
   
 ## I3D model
 [https://arxiv.org/abs/1705.07750], [https://github.com/piergiaj/pytorch-i3d]
+
+
+# TODO
+- train conv2d-rnn with optimal parameters
+- add option to load subset of WLASL dataset (WLASL100, WLASL300, .. - described in WLASL paper).
+- implement I3D model
+- implement pose-rnn model

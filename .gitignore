@@ -2,3 +2,5 @@
 .DS_store
 mj-wip.ipynb
 *.pyc
+notebooks/
+.ipynb
