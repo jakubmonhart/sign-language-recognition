@@ -35,3 +35,17 @@ def get_device(gpu=0):   # Manually specify gpu
         device='cpu'
  
     return device
+
+
+
+def save_best(args, epoch, model, optimizer, best_val_loss):
+    state = {
+            'epoch': epoch,
+            'model': model.state_dict(),
+            'optimizer' : optimizer.state_dict(),
+            'best_val_loss': best_val_loss,
+            'args': args
+            }
+
+    filename = os.path.join(args.save_dir, 'checkpoint.pt.tar'.format(epoch))
+    torch.save(state, filename)

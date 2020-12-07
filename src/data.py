@@ -7,7 +7,7 @@ import torch
 import random
 import math
 
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
 
 
 def get_class_list(json_file):
@@ -71,7 +71,7 @@ def video_to_tensor(pic):
 
 
 class WLASL(Dataset):
-    def __init__(self, json_file='data/WLASL_v0.3.json', videos_path='data/sample-videos', split='train', transforms=None, verbose=False):
+    def __init__(self, json_file='data/WLASL_v0.3.json', videos_path='data/sample-videos', split='train', subset=2000,  transforms=None, verbose=False):
         self.class_list = get_class_list(json_file)
         self.num_classes = len(self.class_list)
         
@@ -80,7 +80,11 @@ class WLASL(Dataset):
         
         dataset = {'video_path': [], 'label': [], 'bounding_box': [], 'num_frames': []}
 
-        for class_id in range(len(data)):
+        for class_id in range(min(subset, len(data))):
+            # Use only N most occuring glosses (N specified by subset). Default 2000 is total number of glosses in WLASL dataset.
+            if class_id > (subset+1):
+                break
+
             for video in data[class_id]['instances']:
 
                 if video['split'] != split:
@@ -153,3 +157,21 @@ class WLASL(Dataset):
             padded_imgs = imgs
             
         return padded_imgs
+        
+        
+class DebugSampler(Sampler):
+    def __init__(self, n_samples, dataset_len=None):
+        self.n_samples = n_samples
+        self.dataset_len = dataset_len
+        
+        if self.dataset_len is  None:
+            self.samples = range(self.n_samples)
+        else:
+            self.samples = random.sample(range(self.dataset_len), self.n_samples)
+
+    def __iter__(self):
+        return iter(self.samples)
+        
+    def __len__(self):
+        return self.n_samples
+
