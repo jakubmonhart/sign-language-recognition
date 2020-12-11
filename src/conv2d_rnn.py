@@ -26,7 +26,7 @@ class Conv2dRNN(nn.Module):
         # Freeze training of pretrained vgg
         if args.freeze_vgg:
             for param in self.vgg16.parameters():
-                param.require_grad = False
+                param.requires_grad = False
         
         # Size of concatenated output of vgg16 features for (3x224x224) rgb image.
         OUT_DIM = 25088
@@ -82,7 +82,7 @@ class Conv2dRNN(nn.Module):
 
 def train(args):
     # Init wandb
-    run = wandb.init(config = args, project='sign-language-recognition')
+    run = wandb.init(name=args.save_dir, config = args, project='sign-language-recognition')
 
     # Create directory for model checkpoints and log
     if not os.path.exists(args.save_dir):
