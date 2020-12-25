@@ -82,7 +82,7 @@ class Conv2dRNN(nn.Module):
 
 def train(args):
     # Init wandb
-    run = wandb.init(name=args.save_dir, config = args, project='sign-language-recognition')
+    run = wandb.init(name=args.save_dir[len('../runs/'):], config = args, project='sign-language-recognition')
 
     # Create directory for model checkpoints and log
     if not os.path.exists(args.save_dir):
@@ -110,7 +110,10 @@ def train(args):
 
     # Data
     
-    real_batch_size = 2 # can't fit more into gpu memory  
+    if args.freeze_vgg:
+        real_batch_size = 3
+    else:
+        real_batch_size = 2 # can't fit more into gpu memory  
     
     json_file = os.path.join(args.data_path, 'WLASL_v0.3.json')
     videos_path = os.path.join(args.data_path, 'videos')
@@ -278,19 +281,20 @@ def main():
     parser.add_argument('--gru_hidden_size', type=int, default=256)
     parser.add_argument('--lr', type=float, default=1e-2)
     parser.add_argument('--batch_size', type=int, default=2)
-    parser.add_argument('--freeze_vgg', type=bool, default=False)
+    parser.add_argument('--freeze_vgg', default=False, action='store_true')
     parser.add_argument('--data_path', type=str, default='../data')
     parser.add_argument('--save_dir', type=str, default='../runs/default')
     parser.add_argument('--subset', type=int, default=100)
-    parser.add_argument('--resume_train', type=bool, default=False)
+    parser.add_argument('--resume_train', default=False, action='store_true')
     parser.add_argument('--debug_dataset', type=int, default=0)
     parser.add_argument('--early_stop', type=int, default=20)
-    parser.add_argument('--use_lr_scheduler', type=bool, default=True)
+    parser.add_argument('--use_lr_scheduler', default=False, action='store_true')
     parser.add_argument('--lr_schedule_patience', type=int, default=5)
     parser.add_argument('--lr_schedule_factor', type=float, default=0.5)
     parser.add_argument('--lr_schedule_threshold', type=float, default=1e-4)
     
     args, _  = parser.parse_known_args() 
+    print(args)
     train(args)
 
    

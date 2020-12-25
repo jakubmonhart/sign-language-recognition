@@ -36,7 +36,7 @@ def load_rgb_frames_from_video(video_path, start_f, num_f, verbose):
         if (not success):
             if verbose:
                 print('{} unsuccesfull read at frame: {}/{}'.format(
-                    video_path ,offset-start_f, min(num_f, int(total_frames - start_f))))
+                    video_path ,offset, min(num_f, int(total_frames - start_f))))
                 
             break
 
@@ -54,6 +54,7 @@ def load_rgb_frames_from_video(video_path, start_f, num_f, verbose):
 
         frames.append(img)
 
+    vidcap.release() 
     return np.asarray(frames, dtype=np.float32)
  
     
@@ -119,7 +120,7 @@ class WLASL(Dataset):
         video_path = self.data['video_path'][key]
         num_frames = self.data['num_frames'][key]
         
-        total_frames = 50
+        total_frames = 50 
 
         # Choose 50 random consecutive frames
         try:
@@ -127,17 +128,31 @@ class WLASL(Dataset):
         except ValueError:
             start_f = 0
         
+
+        # print('\n********\n')
+        # print('video path: {}'.format(video_path))
+        # print('Number of frames {}, Start frame: {}'.format(num_frames, start_f))
         # TODO - resize the frames so that bounding box is in center and 256 pixels in diagonal, crop rest of the image?
         imgs = load_rgb_frames_from_video(video_path, start_f, total_frames, self.verbose)
+        if len(imgs.shape) < 4:
+            print('Wrong formate of images.')
+            print('Path to video is: {}'.format(video_path))
+            print('shape of imgs: {}'.format(imgs.shape))
+            print('imgs: {}'.format(imgs))
+        # imgs = load_rgb_frames_from_video(video_path, start_f, total_frames, True)
+        # print('shape loaded imgs: {}'.format(imgs.shape))
         
         if self.transforms is not None:
             imgs = self.transforms(imgs)
         
         # Pad frames if video is shorter than total_frames
         imgs = self.pad(imgs, total_frames)
+        # print('shape after pad and transform: {}'.format(imgs.shape))
         
         ret_img = video_to_tensor(imgs)
         return {'X': ret_img, 'label': torch.LongTensor([label])}
+        # return [1]
+
     
     def pad(self, imgs, total_frames):
         if imgs.shape[0] < total_frames:
