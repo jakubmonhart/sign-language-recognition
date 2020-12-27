@@ -10,6 +10,210 @@ import math
 from torch.utils.data import Dataset, Sampler
 
 
+# ********* datasets *********
+
+class WLASL(Dataset):
+    def __init__(self, json_file='data/WLASL_v0.3.json', videos_folder='data/sample-videos',
+     keypoints_folder = 'data/sample-keypoints', keypoints=False, split='train', subset=2000, 
+     transforms=None, verbose=False):
+        
+        self.class_list = get_class_list(json_file)
+        self.num_classes = len(self.class_list)
+        self.keypoints = keypoints
+        
+        with open(json_file, 'r') as f:
+            data = json.load(f)
+        
+        dataset = {'video_path': [], 'keypoints_path': [], 'label': [], 'bounding_box': [], 'num_frames': []}
+
+        print(keypoints_folder)
+
+        for class_id in range(min(subset, len(data))):
+            # Use only N most occuring glosses (N specified by subset). Default 2000 is total number of glosses in WLASL dataset.
+            if class_id > (subset+1):
+                break
+
+            for video in data[class_id]['instances']:
+
+                if video['split'] != split:
+                    continue
+
+                video_path = os.path.join(videos_folder, video['video_id'] + '.mp4')
+                keypoints_path = os.path.join(keypoints_folder, video['video_id'] + '.npz')
+                
+                if video['video_id'] == "10005":
+                    print(keypoints_path)
+
+                if keypoints:
+                    if not os.path.exists(keypoints_path):
+                        continue
+
+                else:
+                    if not os.path.exists(videos_path):
+                        continue
+                
+                print(video['video_id'])
+                num_frames = int(cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FRAME_COUNT))
+
+                dataset['label'].append(class_id)
+                dataset['video_path'].append(video_path)
+                dataset['keypoints_path'].append(keypoints_path)
+                dataset['bounding_box'].append(video['bbox'])
+                dataset['num_frames'].append(num_frames)
+        
+        self.data = dataset
+        self.transforms = transforms
+        self.verbose = verbose
+
+        if self.keypoints:
+            self.__getitem__ = self.get_keypoints
+        else:
+            self.__getitem__ = self.get_video
+    
+    def __len__(self):
+        return len(self.data['label'])
+
+    def __getitem__(self, key):
+        if self.keypoints:
+            return self.get_keypoints(key)
+        else:
+            return self.get_video(key)
+
+
+    def get_keypoints(self, key):
+        label = self.data['label'][key]
+        keypoints_path = self.data['keypoints_path'][key]
+        num_frames = self.data['num_frames'][key]
+
+        total_frames = 50
+
+        # Load keypoints
+        keypoints = np.load(keypoints_path)
+
+        # Get coordinates from keypoints
+        pose = np.concatenate([keypoints['pose'][:,:8,:2], keypoints['pose'][:,15:19,:2]], axis=1)
+        face = keypoints['face'][:,:,:2]
+        left_hand = keypoints['hand'][:,0,:,:2]
+        right_hand = keypoints['hand'][:,1,:,:2]
+
+        # Fill in non-detected values
+        pose = fill_zeros(pose)
+        face = fill_zeros(face)
+        left_hand = fill_zeros(left_hand)
+        right_hand = fill_zeros(right_hand)
+
+        # Rescale
+        pose = rescale(pose)
+        face = rescale(face)
+        left_hand = rescale(left_hand)
+        right_hand = rescale(right_hand)
+
+        # Concatenate keypoints
+        X = [pose.reshape(pose.shape[0], -1),
+             face.reshape(face.shape[0], -1),
+             left_hand.reshape(left_hand.shape[0], -1),
+             right_hand.reshape(right_hand.shape[0], -1)]
+
+        X = np.concatenate(X, axis=1)
+
+        # Choose 50 random consecutive frames
+        try:
+            start_f = random.randint(0, num_frames - total_frames - 1)
+        except ValueError:
+            start_f = 0
+
+        X = X[start_f:(start_f+50)]
+
+        X = self.pad_keypoints(X, total_frames)
+
+        return {'X': torch.from_numpy(X), 'label': torch.LongTensor([label])}
+
+    def get_video(self, key):
+        '''
+        Values of pixels are converted to [-1, 1] in load_rgb_frames_from_video() call.
+        '''
+        
+        label = self.data['label'][key]
+        video_path = self.data['video_path'][key]
+        num_frames = self.data['num_frames'][key]
+        
+        total_frames = 50 
+
+        # Choose 50 random consecutive frames
+        try:
+            start_f = random.randint(0, num_frames - total_frames - 1)
+        except ValueError:
+            start_f = 0
+        
+
+        # print('\n********\n')
+        # print('video path: {}'.format(video_path))
+        # print('Number of frames {}, Start frame: {}'.format(num_frames, start_f))
+        # TODO - resize the frames so that bounding box is in center and 256 pixels in diagonal, crop rest of the image?
+        imgs = load_rgb_frames_from_video(video_path, start_f, total_frames, self.verbose)
+        if len(imgs.shape) < 4:
+            print('Wrong format of images.')
+            print('Path to video is: {}'.format(video_path))
+            print('shape of imgs: {}'.format(imgs.shape))
+            print('imgs: {}'.format(imgs))
+        # imgs = load_rgb_frames_from_video(video_path, start_f, total_frames, True)
+        # print('shape loaded imgs: {}'.format(imgs.shape))
+        
+        if self.transforms is not None:
+            imgs = self.transforms(imgs)
+        
+        # Pad frames if video is shorter than total_frames
+        imgs = self.pad(imgs, total_frames)
+        # print('shape after pad and transform: {}'.format(imgs.shape))
+        
+        ret_img = video_to_tensor(imgs)
+        return {'X': ret_img, 'label': torch.LongTensor([label])}
+        # return [1]
+
+    def pad(self, imgs, total_frames):
+        if imgs.shape[0] < total_frames:
+            num_padding = total_frames - imgs.shape[0]
+
+            if num_padding:
+                prob = np.random.random_sample()
+                if prob > 0.5:
+                    pad_img = imgs[0]
+                    pad = np.tile(np.expand_dims(pad_img, axis=0), (num_padding, 1, 1, 1))
+                    padded_imgs = np.concatenate([pad, imgs], axis=0)
+                else:
+                    pad_img = imgs[-1]
+                    pad = np.tile(np.expand_dims(pad_img, axis=0), (num_padding, 1, 1, 1))
+                    padded_imgs = np.concatenate([imgs, pad], axis=0)
+        else:
+            padded_imgs = imgs
+            
+        return padded_imgs
+
+    def pad_keypoints(self, keypoints, total_frames):
+        if keypoints.shape[0] < total_frames:
+            num_padding = total_frames - keypoints.shape[0]
+
+            prob = np.random.random_sample()
+
+            # np.concatenate([np.tile(np.expand_dims(X[0], axis=0), (10, 1)), X[0:40]], axis=0).shape
+
+            if prob > 0.5:
+                pad = np.tile(np.expand_dims(keypoints[0], axis=0), (num_padding, 1))
+                padded_keypoints = np.concatenate([pad, keypoints], axis=0)
+            else:
+                pad = np.tile(np.expand_dims(keypoints[-1], axis=0), (num_padding, 1))
+                padded_keypoints = np.concatenate([keypoints, pad], axis=0)
+
+        else:
+            padded_keypoints = keypoints
+
+        return padded_keypoints
+
+
+
+
+# ******* helper functions *********
+
 def get_class_list(json_file):
     with open(json_file) as ipf:
         content = json.load(ipf)
@@ -71,109 +275,49 @@ def video_to_tensor(pic):
     return torch.from_numpy(pic.transpose([3, 0, 1, 2]))
 
 
-class WLASL(Dataset):
-    def __init__(self, json_file='data/WLASL_v0.3.json', videos_path='data/sample-videos', split='train', subset=2000,  transforms=None, verbose=False):
-        self.class_list = get_class_list(json_file)
-        self.num_classes = len(self.class_list)
-        
-        with open(json_file, 'r') as f:
-            data = json.load(f)
-        
-        dataset = {'video_path': [], 'label': [], 'bounding_box': [], 'num_frames': []}
+# Functions to fill non-detected keypoints
+def fill_zeros_with_last(arr):
+    prev = np.arange(len(arr))
+    prev[arr == 0] = 0
+    prev = np.maximum.accumulate(prev)
+    return arr[prev]
 
-        for class_id in range(min(subset, len(data))):
-            # Use only N most occuring glosses (N specified by subset). Default 2000 is total number of glosses in WLASL dataset.
-            if class_id > (subset+1):
-                break
 
-            for video in data[class_id]['instances']:
-
-                if video['split'] != split:
-                    continue
-
-                video_path = os.path.join(videos_path, video['video_id'] + '.mp4')
-
-                if not os.path.exists(video_path):
-                    continue
-                    
-                
-                num_frames = int(cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FRAME_COUNT))
-
-                dataset['label'].append(class_id)
-                dataset['video_path'].append(video_path)
-                dataset['bounding_box'].append(video['bbox'])
-                dataset['num_frames'].append(num_frames)
-        
-        self.data = dataset
-        self.transforms = transforms
-        self.verbose = verbose
+def fill_zeros(body_part):
     
-    def __len__(self):
-        return len(self.data['label'])
+    for k in range(body_part.shape[1]):
+        keypoint = body_part[:,k]
 
-    def __getitem__(self, key):
-        '''
-        Values of pixels are converted to [-1, 1] in load_rgb_frames_from_video() call.
-        '''
-        
-        label = self.data['label'][key]
-        video_path = self.data['video_path'][key]
-        num_frames = self.data['num_frames'][key]
-        
-        total_frames = 50 
+        # x values
+        keypoint[:,0] = fill_zeros_with_last(keypoint[:,0])
+        keypoint[:,0][::-1] = fill_zeros_with_last(keypoint[:,0][::-1])
 
-        # Choose 50 random consecutive frames
-        try:
-            start_f = random.randint(0, num_frames - total_frames - 1)
-        except ValueError:
-            start_f = 0
-        
-
-        # print('\n********\n')
-        # print('video path: {}'.format(video_path))
-        # print('Number of frames {}, Start frame: {}'.format(num_frames, start_f))
-        # TODO - resize the frames so that bounding box is in center and 256 pixels in diagonal, crop rest of the image?
-        imgs = load_rgb_frames_from_video(video_path, start_f, total_frames, self.verbose)
-        if len(imgs.shape) < 4:
-            print('Wrong formate of images.')
-            print('Path to video is: {}'.format(video_path))
-            print('shape of imgs: {}'.format(imgs.shape))
-            print('imgs: {}'.format(imgs))
-        # imgs = load_rgb_frames_from_video(video_path, start_f, total_frames, True)
-        # print('shape loaded imgs: {}'.format(imgs.shape))
-        
-        if self.transforms is not None:
-            imgs = self.transforms(imgs)
-        
-        # Pad frames if video is shorter than total_frames
-        imgs = self.pad(imgs, total_frames)
-        # print('shape after pad and transform: {}'.format(imgs.shape))
-        
-        ret_img = video_to_tensor(imgs)
-        return {'X': ret_img, 'label': torch.LongTensor([label])}
-        # return [1]
-
+        # y values
+        keypoint[:,1] = fill_zeros_with_last(keypoint[:,1])
+        keypoint[:,1][::-1] = fill_zeros_with_last(keypoint[:,1][::-1])
+        body_part[:,k] = keypoint
     
-    def pad(self, imgs, total_frames):
-        if imgs.shape[0] < total_frames:
-            num_padding = total_frames - imgs.shape[0]
+    return body_part
 
-            if num_padding:
-                prob = np.random.random_sample()
-                if prob > 0.5:
-                    pad_img = imgs[0]
-                    pad = np.tile(np.expand_dims(pad_img, axis=0), (num_padding, 1, 1, 1))
-                    padded_imgs = np.concatenate([pad, imgs], axis=0)
-                else:
-                    pad_img = imgs[-1]
-                    pad = np.tile(np.expand_dims(pad_img, axis=0), (num_padding, 1, 1, 1))
-                    padded_imgs = np.concatenate([imgs, pad], axis=0)
-        else:
-            padded_imgs = imgs
-            
-        return padded_imgs
+
+# Functions for rescale
+def rescale(body_part):
+    maxx = body_part[:,:,0].max()
+    minx = body_part[:,:,0].min()
+    maxy = body_part[:,:,1].max()
+    miny = body_part[:,:,1].min()
+    
+    # rescale x
+    body_part[:,:,0] = (body_part[:,:,0] - minx)*2/(maxx-minx) - 1
+
+    # rescale y
+    body_part[:,:,1] = (body_part[:,:,1] - miny)*2/(maxy-miny) - 1
+    
+    return body_part
         
-        
+
+
+# ******* debug helpers *********
 class DebugSampler(Sampler):
     def __init__(self, n_samples, dataset_len=None):
         self.n_samples = n_samples

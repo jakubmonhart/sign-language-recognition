@@ -13,56 +13,38 @@ from data import WLASL, DebugSampler
 import videotransforms
 from metrics import AverageMeter, topk_accuracy
 
-import wandb
+# import wandb
 
 MAX_NUM_CLASSES = 2000
 
-class Conv2dRNN(nn.Module):
+class PoseRNN(nn.Module):
     def __init__(self, args):
         super().__init__()
-        # We want to embed frames of videos, get rid of classifier part of vgg16 and only use features.
-        self.vgg16 = models.vgg16(pretrained=True, progress=True).features
         
-        # Freeze training of pretrained vgg
-        if args.freeze_vgg:
-            for param in self.vgg16.parameters():
-                param.requires_grad = False
-        
-        # Size of concatenated output of vgg16 features for (3x224x224) rgb image.
-        OUT_DIM = 25088
-        
-        # Init RNN part.
-        self.gru = nn.GRU(input_size=OUT_DIM, hidden_size=args.gru_hidden_size, num_layers=2) 
+        INPUT_SIZE = 248
+        self.gru = nn.GRU(input_size=INPUT_SIZE, hidden_size=args.gru_hidden_size, num_layers=2) 
 
         # Fully connected layer for classificator
         self.fc = nn.Linear(args.gru_hidden_size, min(MAX_NUM_CLASSES, args.subset))
         
     def forward(self, x):
         '''
-        Input dimension: (B x C x T x H x W)
+        Input dimension: (B x T x N)
             - B: batch size
-            - C: number of channels, 3 (rgb)
             - T: number of consecutive frames o video
-            - HxW: dimension of image (224x224) after crop
+            - N: number of keypoint coordinates
         '''
-        
-        # Convnet need input of size(N, C, H, W), merge T and B to N
-        batch_size = x.shape[0]
-        seq_len = x.shape[2]
-        x = x.permute(0, 2, 1, 3, 4)
-        x = x.reshape(batch_size*seq_len, *x.shape[2:])
-        
-        o = self.vgg16(x)
-        # print(o.shape)
 
-        # GRU needs input of shape (seq_len, batch, input_size)
-        o = o.reshape(batch_size, seq_len, -1)
-        # print(o.shape)
-        o = o.permute(1,0,2)
+        batch_size = x.shape[0]
+        seq_len = x.shape[1]
         
+        
+        # GRU input dimension needs to be (seq_len, batch, input_size)
+        x = x.permute(1,0,2)
+    
         # Only need first output
-        o = self.gru(o)[0]
-        # print(o.shape)
+        o = self.gru(x)[0]
+        # # print(o.shape)
 
         # Fully connected layer for classification
         o = o.reshape(seq_len*batch_size, self.gru.hidden_size)
@@ -125,23 +107,30 @@ def train(args):
     if args.debug_dataset: 
         train_dataset = WLASL(json_file=json_file, videos_folder=videos_folder,
                               keypoints_folder=keypoints_folder,
-                              transforms=train_transforms, split='train', subset=args.subset)
+                              transforms=train_transforms, split='train', subset=args.subset,
+                              keypoints=True)
         train_dl = torch.utils.data.DataLoader(train_dataset, batch_size=real_batch_size, sampler=DebugSampler(args.debug_dataset, len(train_dataset)))
         val_dl = train_dl
     else:    
         train_dataset = WLASL(json_file=json_file, videos_folder=videos_folder,
                               keypoints_folder=keypoints_folder,
-                              transforms=train_transforms, split='train', subset=args.subset)
+                              transforms=train_transforms, split='train', subset=args.subset,
+                              keypoints=True)
+        import pathlib
+        print(pathlib.Path().absolute())
+        print(pathlib.Path(__file__).parent.absolute())
+        print(train_dataset.data)
         train_dl = torch.utils.data.DataLoader(train_dataset, batch_size=real_batch_size, shuffle=True)
 
         val_dataset = WLASL(json_file=json_file, videos_folder=videos_folder,
                               keypoints_folder=keypoints_folder,
-                              transforms=val_transforms, split='val', subset=args.subset)
+                              transforms=val_transforms, split='val', subset=args.subset,
+                              keypoints=True)
         val_dl = torch.utils.data.DataLoader(val_dataset, batch_size=real_batch_size, shuffle=True)
     logger.info('data loaded')
     
     # Model, loss, optimizer
-    m = Conv2dRNN(args).to(device)
+    m = PoseRNN(args).to(device)
     optimizer = torch.optim.Adam(m.parameters(), lr=args.lr)
     criterion = nn.CrossEntropyLoss()
     
@@ -267,19 +256,6 @@ def train(args):
 def main():
     # Arguments
     parser = argparse.ArgumentParser()
-
-    # args.n_epochs = 200
-    # args.gru_hidden_size = 256
-    # args.lr = 1e-2
-    # args.batch_size = 2
-    # args.freeze_vgg = True
-
-    # args.data_path = '../data'
-    # args.save_dir = '../runs/conv2d-rnn_freezed_vgg'
-    # args.subset= 100
-    # args.resume_train=False
-    # args.debug_dataset = 0
-    # args.early_stop = 10
 
     parser.add_argument('--n_epochs', type=int, default=200)
     parser.add_argument('--gru_hidden_size', type=int, default=256)
