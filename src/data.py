@@ -26,8 +26,6 @@ class WLASL(Dataset):
         
         dataset = {'video_path': [], 'keypoints_path': [], 'label': [], 'bounding_box': [], 'num_frames': []}
 
-        print(keypoints_folder)
-
         for class_id in range(min(subset, len(data))):
             # Use only N most occuring glosses (N specified by subset). Default 2000 is total number of glosses in WLASL dataset.
             if class_id > (subset+1):
@@ -40,9 +38,6 @@ class WLASL(Dataset):
 
                 video_path = os.path.join(videos_folder, video['video_id'] + '.mp4')
                 keypoints_path = os.path.join(keypoints_folder, video['video_id'] + '.npz')
-                
-                if video['video_id'] == "10005":
-                    print(keypoints_path)
 
                 if keypoints:
                     if not os.path.exists(keypoints_path):
@@ -52,7 +47,6 @@ class WLASL(Dataset):
                     if not os.path.exists(videos_path):
                         continue
                 
-                print(video['video_id'])
                 num_frames = int(cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FRAME_COUNT))
 
                 dataset['label'].append(class_id)
