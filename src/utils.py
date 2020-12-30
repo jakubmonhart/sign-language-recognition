@@ -37,6 +37,13 @@ def get_device(gpu=0):   # Manually specify gpu
     return device
 
 
+def  get_free_device():
+  if torch.cuda.is_available():
+      i = get_free_gpu()
+      device = get_device(gpu=i)
+  else:
+      device = 'cpu'
+
 
 def save_best(args, epoch, model, optimizer, best_val_loss):
     state = {

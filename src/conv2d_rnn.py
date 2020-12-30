@@ -7,9 +7,10 @@ import argparse
 import json
 import numpy as np
 import time
+from tqdm import tqdm
 
 from utils import create_logger, get_free_gpu, get_device, save_best
-from data import WLASL, DebugSampler
+from data import WLASL, DebugSampler, load_rgb_frames_from_video, video_to_tensor
 import videotransforms
 from metrics import AverageMeter, topk_accuracy
 
@@ -264,6 +265,89 @@ def train(args):
             scheduler.step(val_loss)
 
 
+# ****** Functions for evaluations ********
+def test(model_path, device):
+
+      
+  # Test dataset
+  subset = 100
+  data_path = '../data'
+  json_file = os.path.join(data_path, 'WLASL_v0.3.json')
+  videos_folder = os.path.join(data_path, 'videos')
+  keypoints_folder = os.path.join(data_path, 'keypoints')
+ 
+  test_transforms = transforms.Compose([videotransforms.CenterCrop(224)])
+  test_dataset = WLASL(json_file=json_file, videos_folder=videos_folder,
+                        keypoints_folder=keypoints_folder,
+                        transforms=test_transforms, split='test', subset=subset)
+  test_dl = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False)
+  print('data loaded')
+  print(f'len of test dataset: {len(test_dataset)}')
+  
+  # Load model
+  m = load_model(model_path).to(device)
+
+  with torch.no_grad():
+    top1 = AverageMeter()
+    top5 = AverageMeter()
+    top10 = AverageMeter()
+    
+    top1_per_class  = {}
+    top5_per_class  = {}
+    top10_per_class  = {}
+
+    for i in range(subset):
+      top1_per_class[i] = AverageMeter()
+      top5_per_class[i] = AverageMeter()
+      top10_per_class[i] = AverageMeter()
+
+    m.eval()
+    for batch in tqdm(test_dl):
+      X = batch['X'].to(device)
+      label = batch['label'].to(device)
+      
+      # [per frame logits, mean of all frames logits]
+      logits = m(X)
+
+      # Update metrics
+      acc1, acc5, acc10 = topk_accuracy(logits[:,-1], label[0], topk=(1,5,10))
+      top1.update(acc1.item())
+      top1_per_class[label[0].item()].update(acc1.item())
+      top5.update(acc5.item())
+      top5_per_class[label[0].item()].update(acc5.item())
+      top10.update(acc10.item())
+      top10_per_class[label[0].item()].update(acc10.item())
+  
+  print(f'Accuracy - top1: {top1.avg:.3f}, top5: {top5.avg:.3f}, top10: {top10.avg:.3f}')
+  return top1_per_class, top5_per_class, top10_per_class
+  
+
+def load_model(model_path):
+  with open(os.path.join(model_path, 'args.json')) as f:
+    args = argparse.Namespace(**json.load(f))
+  m = Conv2dRNN(args)
+
+  checkpoint = torch.load(os.path.join(model_path, 'checkpoint.pt.tar'), map_location=torch.device('cpu'))
+  m.load_state_dict(checkpoint['model'])
+  return m
+
+
+def predict_video(model_path, video_path, device):
+
+  # Load model
+  m = load_model(model_path).to(device)
+  
+  # Load rgb frames from video
+  frames = load_rgb_frames_from_video(video_path, 0, -1, True)
+  
+  crop = videotransforms.CenterCrop(224)
+  frames = video_to_tensor(crop(frames))
+
+  logits = m(frames.unsqueeze(0).to(device))
+
+  return logits[0,-1]
+
+  
 def main():
     # Arguments
     parser = argparse.ArgumentParser()

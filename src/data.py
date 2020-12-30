@@ -21,6 +21,9 @@ class WLASL(Dataset):
         self.num_classes = len(self.class_list)
         self.keypoints = keypoints
         
+        self.split = split
+        self.rescale_mode = args.rescale_mode
+
         with open(json_file, 'r') as f:
             data = json.load(f)
         
@@ -44,7 +47,7 @@ class WLASL(Dataset):
                         continue
 
                 else:
-                    if not os.path.exists(videos_path):
+                    if not os.path.exists(video_path):
                         continue
                 
                 num_frames = int(cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FRAME_COUNT))
@@ -82,13 +85,34 @@ class WLASL(Dataset):
         total_frames = 50
 
         # Load keypoints
-        keypoints = np.load(keypoints_path)
+        keypoints = np.load(keypoints_path, allow_pickle=True)
 
-        # Get coordinates from keypoints
-        pose = np.concatenate([keypoints['pose'][:,:8,:2], keypoints['pose'][:,15:19,:2]], axis=1)
-        face = keypoints['face'][:,:,:2]
-        left_hand = keypoints['hand'][:,0,:,:2]
-        right_hand = keypoints['hand'][:,1,:,:2]
+
+        # print(keypoints_path)
+        # print(num_frames)
+        if keypoints['pose'].ndim == 1:
+          # Keypoints are not concatenated
+          # Some data also contain none values - need to drop those
+
+          pose = np.concatenate([k for k in keypoints['pose'] if k is not None], axis=0)
+          pose = np.concatenate([pose[:,:8,:2], pose[:,15:19,:2]], axis=1)
+         
+          face  = np.concatenate([k for k in keypoints['face'] if k is not None], axis=0)[:,:,:2]
+
+          left_hand = np.concatenate([k for k in keypoints['hand'][:,0] if k is not None], axis=0)[:,:,:2]
+          right_hand = np.concatenate([k for k in keypoints['hand'][:,1] if k is not None], axis=0)[:,:,:2]
+
+          # print('not concatenated')
+          # print(pose.shape)
+          # print(face.shape)
+          # print(left_hand.shape)
+          # print(right_hand.shape)
+          
+        else:
+          pose = np.concatenate([keypoints['pose'][:,:8,:2], keypoints['pose'][:,15:19,:2]], axis=1)
+          face = keypoints['face'][:,:,:2]
+          left_hand = keypoints['hand'][:,0,:,:2]
+          right_hand = keypoints['hand'][:,1,:,:2]
 
         # Fill in non-detected values
         pose = fill_zeros(pose)
@@ -97,10 +121,10 @@ class WLASL(Dataset):
         right_hand = fill_zeros(right_hand)
 
         # Rescale
-        pose = rescale(pose)
-        face = rescale(face)
-        left_hand = rescale(left_hand)
-        right_hand = rescale(right_hand)
+        pose = rescale(pose, self.rescale_mode)
+        face = rescale(face, self.rescale_mode)       
+        left_hand = rescale(left_hand, self.rescale_mode)
+        right_hand = rescale(right_hand, self.rescale_mode)
 
         # Concatenate keypoints
         X = [pose.reshape(pose.shape[0], -1),
@@ -110,6 +134,7 @@ class WLASL(Dataset):
 
         X = np.concatenate(X, axis=1)
 
+        num_frames = X.shape[0]
         # Choose 50 random consecutive frames
         try:
             start_f = random.randint(0, num_frames - total_frames - 1)
@@ -122,7 +147,7 @@ class WLASL(Dataset):
 
         return {'X': torch.from_numpy(X), 'label': torch.LongTensor([label])}
 
-    def get_video(self, key):
+    def get_video(self, key, test=False):
         '''
         Values of pixels are converted to [-1, 1] in load_rgb_frames_from_video() call.
         '''
@@ -133,11 +158,16 @@ class WLASL(Dataset):
         
         total_frames = 50 
 
-        # Choose 50 random consecutive frames
-        try:
-            start_f = random.randint(0, num_frames - total_frames - 1)
-        except ValueError:
-            start_f = 0
+        if self.split != 'test':
+          # Choose 50 random consecutive frames
+          try:
+              start_f = random.randint(0, num_frames - total_frames - 1)
+          except ValueError:
+              start_f = 0
+        else:
+          # Test - use all frames
+          start_f = 0
+          total_frames = num_frames
         
 
         # print('\n********\n')
@@ -225,9 +255,13 @@ def load_rgb_frames_from_video(video_path, start_f, num_f, verbose):
 
     frames = []
 
-    total_frames = vidcap.get(cv2.CAP_PROP_FRAME_COUNT)
+    total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    if num_f == -1:
+      num_f = total_frames
 
     vidcap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
+
     for offset in range(min(num_f, int(total_frames - start_f))):
         success, img = vidcap.read()
         
@@ -295,19 +329,32 @@ def fill_zeros(body_part):
 
 
 # Functions for rescale
-def rescale(body_part):
+def rescale(body_part, mode):
+  if mode == 'separately':
     maxx = body_part[:,:,0].max()
     minx = body_part[:,:,0].min()
     maxy = body_part[:,:,1].max()
     miny = body_part[:,:,1].min()
+     
+    if (maxx-minx) == 0:
+      pass
+    else:
+      # rescale x
+      body_part[:,:,0] = (body_part[:,:,0] - minx)*2/(maxx-minx) - 1
+      
+    if (maxy-miny) == 0:
+      pass
+    else:
+      # rescale y
+      body_part[:,:,1] = (body_part[:,:,1] - miny)*2/(maxy-miny) - 1
     
-    # rescale x
-    body_part[:,:,0] = (body_part[:,:,0] - minx)*2/(maxx-minx) - 1
+  elif mode == 'globally':
+    body_part = 2*body_part/256.0 - 1
+  else:
+    pass
 
-    # rescale y
-    body_part[:,:,1] = (body_part[:,:,1] - miny)*2/(maxy-miny) - 1
+  return body_part
     
-    return body_part
         
 
 

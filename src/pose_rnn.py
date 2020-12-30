@@ -13,7 +13,7 @@ from data import WLASL, DebugSampler
 import videotransforms
 from metrics import AverageMeter, topk_accuracy
 
-# import wandb
+import wandb
 
 MAX_NUM_CLASSES = 2000
 
@@ -25,7 +25,7 @@ class PoseRNN(nn.Module):
         self.gru = nn.GRU(input_size=INPUT_SIZE, hidden_size=args.gru_hidden_size, num_layers=2) 
 
         # Fully connected layer for classificator
-        self.fc = nn.Linear(args.gru_hidden_size, min(MAX_NUM_CLASSES, args.subset))
+        self.fc = nn.Sequential([nn.Linear(args.gru_hidden_size, args.gru_hidden_size), nn.Linear(args.gru_hidden_size, min(MAX_NUM_CLASSES, args.subset))]
         
     def forward(self, x):
         '''
@@ -91,12 +91,7 @@ def train(args):
     best_loss = torch.Tensor([float('Inf')])
 
     # Data
-    
-    if args.freeze_vgg:
-        real_batch_size = 3
-    else:
-        real_batch_size = 2 # can't fit more into gpu memory  
-    
+    real_batch_size = args.batch_size 
     json_file = os.path.join(args.data_path, 'WLASL_v0.3.json')
     videos_folder = os.path.join(args.data_path, 'videos')
     keypoints_folder = os.path.join(args.data_path, 'keypoints')
@@ -116,10 +111,6 @@ def train(args):
                               keypoints_folder=keypoints_folder,
                               transforms=train_transforms, split='train', subset=args.subset,
                               keypoints=True)
-        import pathlib
-        print(pathlib.Path().absolute())
-        print(pathlib.Path(__file__).parent.absolute())
-        print(train_dataset.data)
         train_dl = torch.utils.data.DataLoader(train_dataset, batch_size=real_batch_size, shuffle=True)
 
         val_dataset = WLASL(json_file=json_file, videos_folder=videos_folder,
@@ -128,6 +119,8 @@ def train(args):
                               keypoints=True)
         val_dl = torch.utils.data.DataLoader(val_dataset, batch_size=real_batch_size, shuffle=True)
     logger.info('data loaded')
+    logger.info(f'size of train dataset: {len(train_dataset)}')
+    logger.info(f'size of validation dataset: {len(val_dataset)}')
     
     # Model, loss, optimizer
     m = PoseRNN(args).to(device)
@@ -253,6 +246,86 @@ def train(args):
             scheduler.step(val_loss)
 
 
+# ********* Evaluation functions **********
+
+def test(model_path, device):
+
+  # Test dataset
+  subset = 100
+  data_path = '../data'
+  json_file = os.path.join(data_path, 'WLASL_v0.3.json')
+  videos_folder = os.path.join(data_path, 'videos')
+  keypoints_folder = os.path.join(data_path, 'keypoints')
+ 
+  test_transforms = transforms.Compose([videotransforms.CenterCrop(224)])
+  test_dataset = WLASL(json_file=json_file, videos_folder=videos_folder,
+                        keypoints_folder=keypoints_folder,
+                        transforms=test_transforms, split='test', subset=subset)
+  test_dl = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False)
+  print('data loaded')
+  print(f'len of test dataset: {len(test_dataset)}')
+  
+  # Load model
+  m = load_model(model_path).to(device)
+
+  with torch.no_grad():
+    top1 = AverageMeter()
+    top5 = AverageMeter()
+    top10 = AverageMeter()
+    
+    top1_per_class  = {}
+    top5_per_class  = {}
+    top10_per_class  = {}
+
+    for i in range(subset):
+      top1_per_class[i] = AverageMeter()
+      top5_per_class[i] = AverageMeter()
+      top10_per_class[i] = AverageMeter()
+
+    m.eval()
+    for batch in tqdm(test_dl):
+      X = batch['X'].to(device)
+      label = batch['label'].to(device)
+      
+      # [per frame logits, mean of all frames logits]
+      logits = m(X)
+
+      # Update metrics
+      acc1, acc5, acc10 = topk_accuracy(logits[:,-1], label[0], topk=(1,5,10))
+      top1.update(acc1.item())
+      top1_per_class[label[0].item()].update(acc1.item())
+      top5.update(acc5.item())
+      top5_per_class[label[0].item()].update(acc5.item())
+      top10.update(acc10.item())
+  
+
+def load_model(model_path):
+  with open(os.path.join(model_path, 'args.json')) as f:
+    args = argparse.Namespace(**json.load(f))
+  m = Conv2dRNN(args)
+
+  checkpoint = torch.load(os.path.join(model_path, 'checkpoint.pt.tar'), map_location=torch.device('cpu'))
+  m.load_state_dict(checkpoint['model'])
+  return m
+
+
+def predict_video(model_path, video_path, device):
+
+  # Load model
+  m = load_model(model_path).to(device)
+  
+  # Load rgb frames from video
+  frames = load_rgb_frames_from_video(video_path, 0, -1, True)
+  
+  crop = videotransforms.CenterCrop(224)
+  frames = video_to_tensor(crop(frames))
+
+  logits = m(frames.unsqueeze(0).to(device))
+
+  return logits[0,-1]
+
+
+# ************ main *********
 def main():
     # Arguments
     parser = argparse.ArgumentParser()
